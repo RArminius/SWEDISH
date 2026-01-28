@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Schwedisch Verbtrainer</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; line-height: 1.6; background-color: #f4f4f9; }
+        h2 { text-align: center; margin-bottom: 10px; }
+        .stats-bar { text-align: center; font-size: 0.9em; color: #666; margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border: 1px solid #ddd; position: relative; }
+        .star-icon { cursor: pointer; font-size: 1.5em; color: #ccc; float: right; transition: color 0.2s; }
+        .star-icon.active { color: #ffc107; }
+        input[type="text"] { width: 100%; padding: 8px; margin: 10px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; transition: background-color 0.3s ease; }
+        .input-error { background-color: #ffe6e6; border-color: red !important; }
+        .input-success { background-color: #e6ffed; border-color: #28a745 !important; color: #155724; }
+        .button-bar { display: flex; align-items: center; justify-content: flex-start; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+        button { padding: 10px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 14px; }
+        button:hover { background: #0056b3; }
+        .btn-char { background: #e9ecef; color: #333; font-weight: bold; width: 38px; height: 38px; padding: 0; font-size: 18px; display: flex; align-items: center; justify-content: center; border: 1px solid #ccc; margin-left: auto; }
+        .filter-box { margin-bottom: 15px; text-align: center; }
+        .feedback { font-weight: bold; margin-top: 10px; min-height: 1.5em; text-align: center; }
+        .hidden { display: none; }
+        .setup-card { text-align: center; background: white; padding: 30px; border-radius: 8px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+
+    <h2>Schwedisch Verbtrainer</h2>
+    
+    <div id="setup" class="setup-card">
+        <p>Wähle deine <code>verblista.csv</code> oder deine exportierten Favoriten:</p>
+        <input type="file" id="csvFile" accept=".csv" style="margin-bottom: 20px;">
+        <div id="fileError" style="color:red"></div>
+    </div>
+
+    <div id="quiz" class="hidden">
+        <div class="filter-box">
+            <label><input type="checkbox" id="onlyStarred" onchange="toggleFilter()"> Nur schwierige Verben (★) üben</label>
+            <button onclick="exportStarred()" style="margin-left:15px; background:#28a745; font-size: 12px; padding: 5px 10px;">Favoriten Exportieren (CSV)</button>
+        </div>
+
+        <div class="card">
+            <span id="star" class="star-icon" onclick="toggleStar()">★</span>
+            <h3 id="displayVerb">Verb: ---</h3>
+            <p>Übersetzung: <span id="displayGerman">---</span></p>
+            <hr>
+            
+            <label>Presens:</label>
+            <input type="text" id="inputPresens" autocomplete="off">
+            <label>Preteritum:</label>
+            <input type="text" id="inputPreteritum" autocomplete="off">
+            <label>Supinum:</label>
+            <input type="text" id="inputSupinum" autocomplete="off">
+
+            <div id="feedback" class="feedback"></div>
+            
+            <div class="button-bar">
+                <button onclick="prevVerb()" id="btnPrev" style="background:#6c757d;">←</button>
+                <button onclick="nextVerb()" id="btnNext" style="background:#6c757d;">→</button>
+                <button onclick="checkAnswers()">Prüfen</button>
+                <button onclick="getHint()" style="background:#ffc107; color: black;">Tipp</button>
+                <button onclick="skipVerb()">Skip</button>
+                <button onclick="openLexicon()" style="background:#17a2b8;">Lexikon</button>
+                <button class="btn-char" onclick="insertChar('å')">å</button>
+            </div>
+        </div>
+        <div class="stats-bar" id="stats"></div>
+    </div>
+
+    <script>
+        let allVerbs = [];
+        let currentQueue = [];
+        let currentIndex = 0;
+        let maxReachedIndex = 0; // Merkt sich, wie weit wir in der aktuellen Session schon waren
+        let lastFocusedInput = null;
+        const STORAGE_KEY = "schwedisch_trainer_stars";
+
+        function getStarredInfs() {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            return saved ? JSON.parse(saved) : [];
+        }
+
+        function toggleStar() {
+            const verb = currentQueue[currentIndex];
+            let starred = getStarredInfs();
+            if (starred.includes(verb.inf)) {
+                starred = starred.filter(i => i !== verb.inf);
+                document.getElementById('star').classList.remove('active');
+            } else {
+                starred.push(verb.inf);
+                document.getElementById('star').classList.add('active');
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(starred));
+            updateStats();
+        }
+
+        function exportStarred() {
+            const starredInfs = getStarredInfs();
+            const toExport = allVerbs.filter(v => starredInfs.includes(v.inf));
+            if (toExport.length === 0) return alert("Keine Favoriten zum Exportieren!");
+            let csvContent = "data:text/csv;charset=utf-8,";
+            toExport.forEach(v => { csvContent += `${v.inf};${v.pres};${v.de};${v.pret};${v.sup}\n`; });
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "schwedisch_favoriten.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function toggleFilter() {
+            const onlyStarred = document.getElementById('onlyStarred').checked;
+            const starredInfs = getStarredInfs();
+            if (onlyStarred) {
+                currentQueue = allVerbs.filter(v => starredInfs.includes(v.inf));
+            } else {
+                currentQueue = [...allVerbs];
+            }
+            if (currentQueue.length === 0) {
+                alert("Keine passenden Verben gefunden!");
+                document.getElementById('onlyStarred').checked = false;
+                currentQueue = [...allVerbs];
+            }
+            shuffle(currentQueue);
+            currentIndex = 0;
+            maxReachedIndex = 0;
+            showStep();
+        }
+
+        document.addEventListener('focusin', (e) => { if (e.target.tagName === 'INPUT') lastFocusedInput = e.target; });
+
+        document.getElementById('csvFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) { parseCSV(event.target.result); };
+            reader.readAsText(file);
+        });
+
+        function parseCSV(data) {
+            const lines = data.split(/\r?\n/).filter(line => line.trim() !== "");
+            const newVerbs = [];
+            const seen = new Set(allVerbs.map(v => v.inf));
+            lines.forEach(line => {
+                const cols = line.split(';');
+                if (cols.length >= 5) {
+                    const inf = cols[0].trim();
+                    if (!seen.has(inf)) {
+                        newVerbs.push({ inf, pres: cols[1].trim(), de: cols[2].trim(), pret: cols[3].trim(), sup: cols[4].trim() });
+                        seen.add(inf);
+                    }
+                }
+            });
+            allVerbs = [...allVerbs, ...newVerbs];
+            currentQueue = [...allVerbs];
+            shuffle(currentQueue);
+            document.getElementById('setup').classList.add('hidden');
+            document.getElementById('quiz').classList.remove('hidden');
+            showStep();
+        }
+
+        function updateStats() {
+            const starredCount = getStarredInfs().length;
+            document.getElementById('stats').innerText = `Verben geladen: ${allVerbs.length} | Davon Favoriten: ${starredCount}`;
+            document.getElementById('btnPrev').disabled = (currentIndex === 0);
+            document.getElementById('btnNext').disabled = (currentIndex === maxReachedIndex);
+        }
+
+        function showStep(isHistory = false) {
+            if (currentIndex >= currentQueue.length) {
+                currentIndex = 0;
+                maxReachedIndex = 0;
+                shuffle(currentQueue);
+            }
+            
+            const v = currentQueue[currentIndex];
+            const starredInfs = getStarredInfs();
+            document.getElementById('displayVerb').innerText = "Verb: " + v.inf;
+            document.getElementById('displayGerman').innerText = v.de;
+            document.getElementById('star').classList.toggle('active', starredInfs.includes(v.inf));
+            document.getElementById('feedback').innerText = "";
+            
+            const fields = [document.getElementById('inputPresens'), document.getElementById('inputPreteritum'), document.getElementById('inputSupinum')];
+            const solutions = [v.pres, v.pret, v.sup];
+
+            fields.forEach((f, i) => {
+                if (isHistory) {
+                    // In der Historie füllen wir die korrekten Antworten ein
+                    f.value = solutions[i].split('|')[0];
+                    f.classList.add('input-success');
+                    f.classList.remove('input-error');
+                } else {
+                    f.value = "";
+                    f.classList.remove('input-error', 'input-success');
+                }
+            });
+
+            document.getElementById('inputPresens').focus();
+            updateStats();
+        }
+
+        function prevVerb() {
+            if (currentIndex > 0) {
+                currentIndex--;
+                showStep(true);
+            }
+        }
+
+        function nextVerb() {
+            if (currentIndex < maxReachedIndex) {
+                currentIndex++;
+                showStep(currentIndex < maxReachedIndex);
+            }
+        }
+
+        function skipVerb() {
+            currentIndex++;
+            if (currentIndex > maxReachedIndex) maxReachedIndex = currentIndex;
+            showStep();
+        }
+
+        function insertChar(char) {
+            const input = lastFocusedInput || document.getElementById('inputPresens');
+            const start = input.selectionStart;
+            input.value = input.value.slice(0, start) + char + input.value.slice(input.selectionEnd);
+            input.focus();
+            input.selectionStart = input.selectionEnd = start + 1;
+        }
+
+        function normalize(s) { return s.trim().toLowerCase(); }
+
+        function checkAnswers() {
+            const v = currentQueue[currentIndex];
+            const fields = [document.getElementById('inputPresens'), document.getElementById('inputPreteritum'), document.getElementById('inputSupinum')];
+            const solutions = [v.pres, v.pret, v.sup];
+            let allOk = true;
+            let firstWrongField = null;
+
+            fields.forEach((f, i) => {
+                const ok = solutions[i].split('|').map(s => normalize(s)).includes(normalize(f.value));
+                f.classList.toggle('input-success', ok);
+                f.classList.toggle('input-error', !ok && f.value !== "");
+                if (!ok) { allOk = false; if (!firstWrongField) firstWrongField = f; }
+            });
+
+            if (allOk) {
+                document.getElementById('feedback').innerHTML = "<span style='color:green'>✅ Snyggt!</span>";
+                setTimeout(() => {
+                    currentIndex++;
+                    if (currentIndex > maxReachedIndex) maxReachedIndex = currentIndex;
+                    showStep();
+                }, 800);
+            } else if (firstWrongField) {
+                firstWrongField.focus();
+            }
+        }
+
+        function getHint() {
+            const v = currentQueue[currentIndex];
+            const fields = [document.getElementById('inputPresens'), document.getElementById('inputPreteritum'), document.getElementById('inputSupinum')];
+            const solutions = [v.pres.split('|')[0], v.pret.split('|')[0], v.sup.split('|')[0]];
+            for (let i=0; i<3; i++) {
+                if (!solutions[i].split('|').map(s => normalize(s)).includes(normalize(fields[i].value))) {
+                    fields[i].value = solutions[i].substring(0, fields[i].value.length + 1);
+                    fields[i].focus();
+                    break;
+                }
+            }
+        }
+
+        function openLexicon() { window.open(`https://svenska.se/tre/?sok=${currentQueue[currentIndex].inf}`, '_blank'); }
+        function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); checkAnswers(); }
+            if (e.target.tagName !== 'INPUT') {
+                if (e.key === 'h') getHint();
+                if (e.key === 's') skipVerb();
+                if (e.key === 'ArrowLeft') prevVerb();
+                if (e.key === 'ArrowRight') nextVerb();
+                if (e.key === 'f') toggleStar(); // 'f' für Favorit/Sterne
+            }
+        });
+    </script>
+</body>
+</html>
